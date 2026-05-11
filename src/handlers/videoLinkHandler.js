@@ -117,11 +117,16 @@ async function handleVideoLink(ctx, url) {
     logInfo(`[VIDEO_LINK] userId=${String(userId || 'anonymous')} url=${url}`);
     loadingMessage = await safeReply(ctx, LOADING_MESSAGE, HTML_OPTIONS);
 
+    logInfo(`[VIDEO_DOWNLOAD_START] userId=${String(userId || 'anonymous')} url=${url}`);
     const downloaded = await downloadAudioFromVideo(url);
     workspace = downloaded.workspace;
+    logInfo(`[VIDEO_DOWNLOAD_DONE] userId=${String(userId || 'anonymous')}`);
 
+    logInfo(`[VIDEO_STT_START] userId=${String(userId || 'anonymous')}`);
     const transcript = await transcribeAudio(downloaded.audioPath);
+    logInfo(`[VIDEO_TRANSLATION_START] userId=${String(userId || 'anonymous')}`);
     const translation = await translateTextToRussian(transcript);
+    logInfo(`[VIDEO_ANALYSIS_START] userId=${String(userId || 'anonymous')}`);
     const analysis = await analyzeTranscriptWithGrok(transcript, url);
     analysis.translation = translation;
     const formattedMessage = formatVideoAnalysis(analysis);

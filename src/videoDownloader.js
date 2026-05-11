@@ -71,10 +71,15 @@ function getYtDlpNetworkArgs(url) {
     String(config.video.ytDlpRetries),
     '--extractor-retries',
     String(config.video.ytDlpExtractorRetries),
-    '--force-ipv4',
     '--user-agent',
     DEFAULT_BROWSER_USER_AGENT
   ];
+
+  if (config.video.ytDlpForceIp === 'ipv4') {
+    args.push('--force-ipv4');
+  } else if (config.video.ytDlpForceIp === 'ipv6') {
+    args.push('--force-ipv6');
+  }
 
   if (config.video.ytDlpProxy) {
     args.push('--proxy', config.video.ytDlpProxy);
