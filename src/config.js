@@ -60,12 +60,14 @@ assertValidUrl('OPENAI_BASE_URL', openAIBaseUrl);
 const config = {
   botToken: getEnv('BOT_TOKEN'),
   aiTimeoutMs: parsePositiveInteger('AI_TIMEOUT_MS', 45000),
+  telegramHandlerTimeoutMs: parsePositiveInteger('TELEGRAM_HANDLER_TIMEOUT_MS', 420000),
   historyLimit: Math.min(parsePositiveInteger('HISTORY_LIMIT', 4), 4),
   useHistory: parseBoolean('USE_HISTORY', false),
   video: {
     tempDir: getEnv('VIDEO_TEMP_DIR', path.join(process.cwd(), 'tmp', 'video')),
     maxDurationSec: parsePositiveInteger('VIDEO_MAX_DURATION_SEC', 600),
-    jobTimeoutMs: parsePositiveInteger('VIDEO_JOB_TIMEOUT_MS', 180000),
+    jobTimeoutMs: parsePositiveInteger('VIDEO_JOB_TIMEOUT_MS', 300000),
+    ytDlpFormat: getEnv('YT_DLP_FORMAT', 'ba/b[height<=720]/worst'),
     ytDlpSocketTimeoutSec: parsePositiveInteger('YT_DLP_SOCKET_TIMEOUT_SEC', 60),
     ytDlpRetries: parsePositiveInteger('YT_DLP_RETRIES', 3),
     ytDlpExtractorRetries: parsePositiveInteger('YT_DLP_EXTRACTOR_RETRIES', 3),

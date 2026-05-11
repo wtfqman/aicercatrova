@@ -17,7 +17,9 @@ const { mainMenuKeyboard, CALLBACKS } = require('./keyboards');
 const { clearHistory } = require('./memory');
 const { extractSupportedVideoUrl } = require('./videoDownloader');
 
-const bot = new Telegraf(config.botToken);
+const bot = new Telegraf(config.botToken, {
+  handlerTimeout: config.telegramHandlerTimeoutMs
+});
 
 const HTML_OPTIONS = { parse_mode: 'HTML' };
 

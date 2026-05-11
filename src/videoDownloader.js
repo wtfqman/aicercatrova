@@ -423,6 +423,8 @@ async function downloadAudioFromVideo(url) {
       ...getYtDlpNetworkArgs(url),
       ...getYtDlpFfmpegArgs(),
       ...getYtDlpCookieArgs(),
+      '-f',
+      config.video.ytDlpFormat,
       '--match-filter',
       `duration <= ${config.video.maxDurationSec}`,
       '-x',
