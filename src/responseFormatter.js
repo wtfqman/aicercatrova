@@ -42,8 +42,7 @@ function getTopics(aiData) {
   return [];
 }
 
-function formatCreatorResponse(aiData) {
-  const answer = escapeHtml(sanitizeAnswer(aiData?.answer) || FALLBACK_ANSWER);
+function getCreatorResponseTopics(aiData) {
   const topics = getTopics(aiData);
   const safeTopics = topics
     .filter((topic) => typeof topic === 'string' && topic.trim())
@@ -55,6 +54,12 @@ function formatCreatorResponse(aiData) {
     safeTopics.push(FALLBACK_TOPIC);
   }
 
+  return safeTopics;
+}
+
+function formatCreatorResponse(aiData) {
+  const answer = escapeHtml(sanitizeAnswer(aiData?.answer) || FALLBACK_ANSWER);
+  const safeTopics = getCreatorResponseTopics(aiData);
   const topicLines = safeTopics
     .map((topic, index) => `${index + 1}. ${escapeHtml(topic)}`)
     .join('\n');
@@ -63,5 +68,6 @@ function formatCreatorResponse(aiData) {
 }
 
 module.exports = {
-  formatCreatorResponse
+  formatCreatorResponse,
+  getCreatorResponseTopics
 };

@@ -1,6 +1,7 @@
 const { askAI } = require('../ai');
 const { addToHistory, getHistory, getLastVideoTranscript } = require('../memory');
-const { formatCreatorResponse } = require('../responseFormatter');
+const { contentTopicsCopyKeyboard } = require('../keyboards');
+const { formatCreatorResponse, getCreatorResponseTopics } = require('../responseFormatter');
 const { translateTextToRussian } = require('../translator');
 const escapeHtml = require('../utils/escapeHtml');
 const { logError, logInfo } = require('../utils/logger');
@@ -153,8 +154,15 @@ async function handleAIQuestion(ctx, question) {
     const history = getHistory(userId);
     const aiData = await askAI(userId, normalizedQuestion, history);
     const formattedMessage = formatCreatorResponse(aiData);
+    const copyKeyboard = contentTopicsCopyKeyboard(getCreatorResponseTopics(aiData));
+    const responseOptions = { ...HTML_OPTIONS, ...copyKeyboard };
 
-    const answerSent = await safeEditOrReply(ctx, loadingMessage, formattedMessage, HTML_OPTIONS);
+    let answerSent = await safeEditOrReply(ctx, loadingMessage, formattedMessage, responseOptions);
+
+    if (!answerSent && copyKeyboard.reply_markup) {
+      logInfo('[AI_QUESTION] retrying answer without copy keyboard');
+      answerSent = await safeEditOrReply(ctx, loadingMessage, formattedMessage, HTML_OPTIONS);
+    }
 
     if (answerSent) {
       addToHistory(userId, 'user', normalizedQuestion);
