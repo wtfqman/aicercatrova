@@ -6,17 +6,162 @@ const { logError, logInfo } = require('./utils/logger');
 
 const PREVIEW_MAX_LENGTH = 300;
 const VIDEO_ANALYSIS_SYSTEM_PROMPT = [
-  'Ты редактор коротких fashion/creator-видео.',
-  'Превращай автоматические расшифровки в понятный русский перевод, разбор и идеи для контента.',
-  'Исправляй очевидные ошибки распознавания по контексту, но не выдумывай факты.',
+  'Ты не генератор красивой AI-воды, а редактор коротких fashion/creator-видео.',
+  'Твоя задача — помочь креатору понять, что реально есть в ролике и что из этого можно адаптировать.',
+  'Не выдумывай настроение, эстетику, intent автора, эмоции, бренды или смысл, если их нет в расшифровке.',
+  'Если исходник слабый, отвечай короче и честнее.',
   'Отвечай строго JSON.'
 ].join(' ');
+const BANNED_VIDEO_PHRASES = [
+  'рок-н-ролльный вайб',
+  'рок-н-ролльная эстетика',
+  'рок-н-ролльный стиль',
+  'рок-н-ролл',
+  'рок-н-ролль',
+  'смелый образ',
+  'атмосфера',
+  'модный эксперимент',
+  'casual to rock',
+  'стильный и смелый',
+  'идеальный look',
+  'идеальный лук',
+  'fashion vibe',
+  'смелое сочетание',
+  'готовы к'
+];
+const LOW_CONFIDENCE_PATTERNS = [
+  /\b(?:inaudible|unintelligible|unknown|noise|music|silence|audio unclear)\b/iu,
+  /\b(?:неразборчиво|не слышно|шум|музыка|тишина|непонятно)\b/iu,
+  /\[[^\]]*(?:inaudible|music|noise|неразборчиво|музыка|шум)[^\]]*\]/iu,
+  /\([^)]*(?:inaudible|music|noise|неразборчиво|музыка|шум)[^)]*\)/iu
+];
+const STT_ERROR_HINTS = [
+  'chaquette',
+  'haut-pais',
+  'kopein',
+  't-shirt bleue',
+  'une t-shirt',
+  'sur la tête',
+  'flèche haut'
+];
 
 function preview(text) {
   return String(text || '')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, PREVIEW_MAX_LENGTH);
+}
+
+function normalizeForSearch(text) {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function countMatches(text, pattern) {
+  const matches = String(text || '').match(pattern);
+  return matches ? matches.length : 0;
+}
+
+function getWords(text) {
+  return String(text || '').match(/[\p{L}\p{N}][\p{L}\p{N}'-]{1,}/gu) || [];
+}
+
+function isLowConfidenceTranscript(transcript) {
+  const text = String(transcript || '').trim();
+  const normalized = normalizeForSearch(text);
+  const words = getWords(text);
+  const uniqueWords = new Set(words.map((word) => normalizeForSearch(word)));
+  const reasons = [];
+
+  if (words.length < 18) {
+    reasons.push('слишком мало распознанного текста');
+  }
+
+  if (text.length < 120) {
+    reasons.push('очень короткая расшифровка');
+  }
+
+  const unclearPatternCount = LOW_CONFIDENCE_PATTERNS
+    .filter((pattern) => pattern.test(text))
+    .length;
+
+  if (unclearPatternCount > 0) {
+    reasons.push('есть маркеры плохого звука или неразборчивой речи');
+  }
+
+  const punctuationCount = countMatches(text, /[.!?,;:]/g);
+  const sentenceCount = countMatches(text, /[.!?]/g);
+
+  if (words.length > 35 && sentenceCount === 0 && punctuationCount < 2) {
+    reasons.push('текст выглядит как длинный поток обрывков без фраз');
+  }
+
+  if (words.length > 30 && uniqueWords.size / words.length < 0.45) {
+    reasons.push('много повторов и мало уникальных слов');
+  }
+
+  const strangeCharRatio = text.length > 0
+    ? countMatches(text, /[^\p{L}\p{N}\s.,!?;:'"«»()/-]/gu) / text.length
+    : 0;
+
+  if (strangeCharRatio > 0.08) {
+    reasons.push('много технического мусора в тексте');
+  }
+
+  const sttHintCount = STT_ERROR_HINTS
+    .filter((hint) => normalized.includes(hint))
+    .length;
+
+  if (sttHintCount >= 2) {
+    reasons.push('есть признаки ошибок автоматической расшифровки');
+  }
+
+  return {
+    isLowConfidence: reasons.length > 0,
+    reasons
+  };
+}
+
+function buildVideoAnalysisOptions(requestText = '') {
+  const normalized = normalizeForSearch(requestText);
+
+  return {
+    includeCta: /\bcta\b|призыв|призови|призыв к действию/.test(normalized),
+    includePlan: /план|структур|структура поста|сценари|разбей на блоки/.test(normalized),
+    includeHooks: /хук|хуки|hook|hooks|надпис/.test(normalized),
+    includeTitles: /заголов|назван/.test(normalized)
+  };
+}
+
+function collectTextValues(value) {
+  if (Array.isArray(value)) {
+    return value.flatMap(collectTextValues);
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.values(value).flatMap(collectTextValues);
+  }
+
+  return [String(value || '')];
+}
+
+function findBannedVideoPhrases(value) {
+  const text = collectTextValues(value).join(' ');
+  const normalized = normalizeForSearch(text);
+
+  return BANNED_VIDEO_PHRASES.filter((phrase) => normalized.includes(normalizeForSearch(phrase)));
+}
+
+function hasAnyExplicitBlock(options) {
+  return Boolean(
+    options?.includeCta ||
+    options?.includePlan ||
+    options?.includeHooks ||
+    options?.includeTitles
+  );
 }
 
 function assertXAIConfigured() {
@@ -128,48 +273,90 @@ function parseJsonObject(rawText) {
   }
 }
 
-function normalizeStringList(value, fallback = []) {
-  if (!Array.isArray(value)) {
-    return fallback;
+function normalizeStringList(value, fallback = [], maxLength = 5) {
+  const source = Array.isArray(value) ? value : fallback;
+  const result = [];
+
+  for (const item of source) {
+    const text = String(item || '').replace(/\s+/g, ' ').trim();
+
+    if (!text || findBannedVideoPhrases(text).length > 0 || result.includes(text)) {
+      continue;
+    }
+
+    result.push(text);
+
+    if (result.length >= maxLength) {
+      break;
+    }
   }
 
-  return value
-    .filter((item) => typeof item === 'string' && item.trim())
-    .map((item) => item.trim())
-    .slice(0, 5);
+  return result;
 }
 
-function normalizeVideoIdeas(parsed, transcript) {
+function getFirstString(...values) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+
+  return '';
+}
+
+function normalizeVideoIdeas(parsed, transcript, quality, options = {}) {
+  const isLowConfidence = Boolean(quality?.isLowConfidence || parsed?.confidence === 'low');
   const summary = typeof parsed?.summary === 'string' && parsed.summary.trim()
     ? parsed.summary.trim()
-    : 'Видео уже расшифровано. Ниже — идеи, которые можно использовать для контента.';
-  const translation = typeof parsed?.translation === 'string' && parsed.translation.trim()
-    ? parsed.translation.trim()
-    : '';
+    : isLowConfidence
+      ? 'Расшифровка получилась слабой, поэтому можно уверенно выделить только общий смысл ролика.'
+      : 'В ролике есть несколько деталей, которые можно аккуратно разобрать для контента.';
+  const translation = getFirstString(parsed?.translation, parsed?.meaning, parsed?.adapted_translation);
+  const contentIdeasFallback = isLowConfidence
+    ? [
+      'Взять только видимый приём из ролика и показать его на своём примере',
+      'Разобрать одну заметную деталь образа без попытки объяснить весь стиль',
+      'Сравнить, что делает образ понятнее: слой, фактура или цвет'
+    ]
+    : [
+      'Показать, какие детали образа реально видны в видео',
+      'Объяснить один приём из ролика на своём примере',
+      'Сравнить простой вариант образа и вариант с дополнительным слоем'
+    ];
+  const optionalBlocks = {};
+
+  if (options.includeTitles) {
+    optionalBlocks.titles = normalizeStringList(parsed?.titles, [], 5);
+  }
+
+  if (options.includeHooks) {
+    optionalBlocks.hooks = normalizeStringList(parsed?.hooks, [], 5);
+  }
+
+  if (options.includePlan) {
+    optionalBlocks.post_plan = normalizeStringList(parsed?.post_plan, [], 5);
+  }
+
+  if (options.includeCta) {
+    optionalBlocks.cta = getFirstString(parsed?.cta);
+  }
 
   return {
+    confidence: isLowConfidence ? 'low' : 'normal',
+    quality_note: isLowConfidence
+      ? `Расшифровка слабая${quality?.reasons?.length ? `: ${quality.reasons.join(', ')}` : ''}. Поэтому анализ сокращён и без выдуманных выводов.`
+      : '',
     summary,
     translation,
-    titles: normalizeStringList(parsed?.titles, [
-      'Как упаковать главную мысль ролика в сильный заголовок?',
-      'Почему этот хук может удержать внимание зрителя?',
-      'Как превратить идею ролика в полезный пост?'
-    ]),
-    hooks: normalizeStringList(parsed?.hooks, [
-      'Начни с главной боли зрителя и сразу покажи пользу.',
-      'Сравни ошибку и правильный вариант в первом кадре.',
-      'Сделай короткое обещание результата без длинного вступления.'
-    ]),
-    post_plan: normalizeStringList(parsed?.post_plan, [
-      'Коротко обозначить проблему из видео.',
-      'Разобрать главную мысль простыми словами.',
-      'Дать 3 практических вывода для подписчика.',
-      'Закончить вопросом или призывом сохранить пост.'
-    ]),
-    cta: typeof parsed?.cta === 'string' && parsed.cta.trim()
-      ? parsed.cta.trim()
-      : 'Сохрани, чтобы вернуться к этой идее перед съёмкой следующего ролика.',
-    transcript
+    content_ideas: normalizeStringList(
+      parsed?.content_ideas || parsed?.ideas || parsed?.takeaways,
+      contentIdeasFallback,
+      isLowConfidence ? 3 : 5
+    ),
+    key_takeaway: getFirstString(parsed?.key_takeaway, parsed?.insight, parsed?.interesting_point),
+    optional_blocks: optionalBlocks,
+    transcript,
+    requested_extra_blocks: hasAnyExplicitBlock(options)
   };
 }
 
@@ -259,169 +446,341 @@ async function transcribeAudio(audioPath) {
   });
 }
 
-function buildTranscriptAnalysisPrompt(transcript, sourceUrl) {
+function describeRequestedBlocks(options) {
+  const blocks = [];
+
+  if (options.includeTitles) {
+    blocks.push('titles');
+  }
+
+  if (options.includeHooks) {
+    blocks.push('hooks');
+  }
+
+  if (options.includePlan) {
+    blocks.push('post_plan');
+  }
+
+  if (options.includeCta) {
+    blocks.push('cta');
+  }
+
+  return blocks.length > 0 ? blocks.join(', ') : 'нет';
+}
+
+function buildTranscriptAnalysisPrompt(transcript, sourceUrl, options = {}, quality = {}, retryInstruction = '') {
+  const confidenceLabel = quality?.isLowConfidence ? 'LOW' : 'NORMAL';
+  const qualityReasons = quality?.reasons?.length ? quality.reasons.join('; ') : 'нет';
+  const requestedBlocks = describeRequestedBlocks(options);
+  const retryBlock = retryInstruction
+    ? `\n\nПОВТОРНАЯ ПОПЫТКА:\n${retryInstruction}`
+    : '';
+
   return `Ты — редактор и помощник креатора по стилю, моде и коротким видео.
 Пользователь дал ссылку на TikTok/Reels, аудио уже расшифровано автоматически.
-Расшифровка может быть на любом языке и может содержать ошибки STT: сломанные названия брендов, вещей, цветов, падежей и фраз.
+Расшифровка может быть на любом языке и может содержать ошибки STT: сломанные слова, бренды, вещи, цвета, падежи и фразы.
 
 ССЫЛКА:
 ${sourceUrl}
+
+ОЦЕНКА КАЧЕСТВА РАСШИФРОВКИ:
+confidence=${confidenceLabel}
+reasons=${qualityReasons}
+
+ЯВНО ЗАПРОШЕННЫЕ ДОПОЛНИТЕЛЬНЫЕ БЛОКИ:
+${requestedBlocks}
 
 РАСШИФРОВКА:
 ${transcript}
 
 Сделай результат на живом русском языке.
-Главная задача — не буквальный машинный пересказ, а понятный смысловой разбор для креатора.
+Главная задача — не сделать красивый AI-текст, а помочь креатору понять, что полезного реально есть в ролике.
 
 Правила:
+- По умолчанию НЕ делай CTA, план поста, длинный анализ, хуки и заголовки. Добавляй эти поля только если они есть в списке явно запрошенных блоков.
 - Не придумывай факты, которых нет в расшифровке.
+- Нельзя придумывать настроение, эстетику, характер образа, эмоции или intent автора.
+- Не натягивай "стиль" там, где в расшифровке есть только набор вещей.
 - Если слово распознано криво, восстанови вероятный смысл по контексту, но не выдумывай точные бренды/предметы, если не уверен.
 - Не тащи в русский текст бессмысленные куски вроде "на голову надеваем куртку"; исправляй очевидные ошибки на естественный вариант вроде "сверху добавляем куртку".
 - Если деталь непонятна, лучше сформулируй нейтрально: "темная обувь", "куртка", "винтажная футболка".
-- Не пиши общие заголовки в стиле "модные советы" или "секреты стиля". Все темы должны опираться на конкретный ролик.
-- Хуки должны звучать как короткие надписи для первого кадра, а не как рекламные фразы "Хотите узнать...".
-- CTA должен провоцировать комментарии естественно и без канцелярита.
+- Если расшифровка LOW, отвечай короче: 1-2 предложения summary, 2-3 предложения translation, 2-3 content_ideas.
+- Если ролик простой или бытовой, не раздувай его в storytelling.
+- Если сильной мысли нет, так и покажи: "сильной идеи в расшифровке нет, можно взять только..."
+- Content ideas должны быть конкретными и связанными с роликом, без кликбейта и рекламного тона.
+- Перевод должен быть смысловой и естественный, а не дословная калька.
+
+Запрещённые фразы и близкие формулировки:
+- рок-н-ролльный вайб
+- рок-н-ролльная эстетика
+- рок-н-ролльный стиль
+- рок-н-ролл
+- смелый образ
+- атмосфера
+- модный эксперимент
+- casual to rock
+- стильный и смелый
+- идеальный look
+- fashion vibe
+- смелое сочетание
+- готовы к
 
 Верни строго JSON без Markdown:
 {
-  "summary": "2-3 предложения: что происходит в ролике и какая идея/приём в нём полезны для контента",
-  "translation": "естественный русский перевод или смысловая адаптация речи из видео, 4-8 предложений",
-  "titles": ["ровно 5 конкретных заголовков для поста или Reels по этому ролику"],
-  "hooks": ["ровно 5 коротких хуков/надписей для первого кадра по этому ролику"],
-  "post_plan": ["4-5 конкретных пунктов плана поста по этому ролику"],
-  "cta": "один короткий живой CTA"
-}`;
+  "confidence": "normal или low",
+  "summary": "кратко о чём ролик и что реально понятно",
+  "translation": "естественный русский перевод или смысловая адаптация речи из видео",
+  "content_ideas": ["3-5 полезных идей для контента, при LOW 2-3 идеи"],
+  "key_takeaway": "если есть интересная мысль или приём; иначе пустая строка"
 }
 
-async function requestGrokVideoIdeas(transcript, sourceUrl) {
+Если явно запрошены дополнительные блоки, добавь только соответствующие поля:
+{
+  "titles": ["конкретные заголовки без AI-тона"],
+  "hooks": ["короткие хуки без generic-фраз"],
+  "post_plan": ["структура поста только если запрошена"],
+  "cta": "CTA только если запрошен"
+}${retryBlock}`;
+}
+
+function getVideoAnalysisProblems(parsed, analysis) {
+  const badPhrases = findBannedVideoPhrases({
+    summary: analysis?.summary,
+    translation: analysis?.translation,
+    content_ideas: analysis?.content_ideas,
+    key_takeaway: analysis?.key_takeaway,
+    optional_blocks: analysis?.optional_blocks
+  });
+  const problems = [];
+
+  if (!parsed) {
+    problems.push('invalid_json');
+  }
+
+  if (badPhrases.length > 0) {
+    problems.push(`banned_phrases:${badPhrases.join(',')}`);
+  }
+
+  if (!analysis?.summary || !analysis?.translation) {
+    problems.push('missing_core_fields');
+  }
+
+  if (!Array.isArray(analysis?.content_ideas) || analysis.content_ideas.length === 0) {
+    problems.push('missing_content_ideas');
+  }
+
+  return problems;
+}
+
+function buildFallbackVideoAnalysis(transcript, quality, options = {}) {
+  const isLowConfidence = Boolean(quality?.isLowConfidence);
+  const optionalBlocks = {};
+
+  if (options.includeTitles) {
+    optionalBlocks.titles = [];
+  }
+
+  if (options.includeHooks) {
+    optionalBlocks.hooks = [];
+  }
+
+  if (options.includePlan) {
+    optionalBlocks.post_plan = [];
+  }
+
+  if (options.includeCta) {
+    optionalBlocks.cta = '';
+  }
+
+  return {
+    confidence: isLowConfidence ? 'low' : 'normal',
+    quality_note: isLowConfidence
+      ? `Расшифровка слабая${quality?.reasons?.length ? `: ${quality.reasons.join(', ')}` : ''}. Поэтому анализ сокращён и без выдуманных выводов.`
+      : '',
+    summary: isLowConfidence
+      ? 'По расшифровке нельзя уверенно сделать подробный разбор. Похоже, автор показывает образ и отдельные детали, но сильная мысль в тексте не считывается.'
+      : 'В ролике можно разобрать только те детали, которые явно слышны в расшифровке. Сильную дополнительную идею лучше не додумывать.',
+    translation: 'Смысл речи распознан не полностью. Безопаснее использовать это видео как визуальный пример и не опираться на спорные детали текста.',
+    content_ideas: [
+      'Разобрать один видимый элемент образа вместо попытки объяснить весь ролик',
+      'Показать, как один слой или фактура меняют впечатление от простого сочетания',
+      'Сделать короткий формат: что видно в образе и что можно повторить у себя'
+    ].slice(0, isLowConfidence ? 2 : 3),
+    key_takeaway: '',
+    optional_blocks: optionalBlocks,
+    transcript,
+    requested_extra_blocks: hasAnyExplicitBlock(options)
+  };
+}
+
+async function normalizeVideoAnalysisWithRetry(fetchRaw, transcript, sourceUrl, options, providerName) {
+  const quality = isLowConfidenceTranscript(transcript);
+  let rawText = await fetchRaw('');
+  let parsed = parseJsonObject(rawText);
+  let analysis = normalizeVideoIdeas(parsed, transcript, quality, options);
+  let problems = getVideoAnalysisProblems(parsed, analysis);
+
+  if (problems.length > 0) {
+    logError(`[VIDEO_ANALYSIS_RETRY] provider=${providerName} problems=${problems.join('|')} source=${sourceUrl}`);
+    rawText = await fetchRaw(
+      'Ответ слишком generic, AI-шаблонный или неполный. Перепиши короче, конкретнее и без воды. ' +
+      'Не используй banned phrases. Не добавляй CTA, план, хуки или заголовки, если их не просили явно.'
+    );
+    parsed = parseJsonObject(rawText);
+    analysis = normalizeVideoIdeas(parsed, transcript, quality, options);
+    problems = getVideoAnalysisProblems(parsed, analysis);
+  }
+
+  if (problems.length > 0) {
+    logError(`[VIDEO_ANALYSIS_FALLBACK] provider=${providerName} problems=${problems.join('|')} source=${sourceUrl}`);
+    return buildFallbackVideoAnalysis(transcript, quality, options);
+  }
+
+  return analysis;
+}
+
+async function requestGrokVideoIdeas(transcript, sourceUrl, options = {}) {
   assertXAIConfigured();
+  const quality = isLowConfidenceTranscript(transcript);
 
-  const body = {
-    model: config.xai.model,
-    messages: [
-      {
-        role: 'system',
-        content: VIDEO_ANALYSIS_SYSTEM_PROMPT
+  const fetchRaw = async (retryInstruction = '') => {
+    const body = {
+      model: config.xai.model,
+      messages: [
+        {
+          role: 'system',
+          content: VIDEO_ANALYSIS_SYSTEM_PROMPT
+        },
+        {
+          role: 'user',
+          content: buildTranscriptAnalysisPrompt(transcript, sourceUrl, options, quality, retryInstruction)
+        }
+      ],
+      temperature: 0.25,
+      max_tokens: 1400,
+      response_format: { type: 'json_object' }
+    };
+
+    const response = await axios.post(`${config.xai.baseUrl}/chat/completions`, body, {
+      headers: {
+        Authorization: `Bearer ${config.xai.apiKey}`,
+        'Content-Type': 'application/json'
       },
-      {
-        role: 'user',
-        content: buildTranscriptAnalysisPrompt(transcript, sourceUrl)
-      }
-    ],
-    temperature: 0.45,
-    max_tokens: 1800,
-    response_format: { type: 'json_object' }
+      timeout: config.video.jobTimeoutMs
+    });
+
+    const rawText = response.data?.choices?.[0]?.message?.content?.trim();
+
+    if (!rawText) {
+      throw new Error('Grok returned an empty video analysis.');
+    }
+
+    logInfo(`[XAI_VIDEO_RAW] first 300 chars: ${preview(rawText)}`);
+    return rawText;
   };
 
-  const response = await axios.post(`${config.xai.baseUrl}/chat/completions`, body, {
-    headers: {
-      Authorization: `Bearer ${config.xai.apiKey}`,
-      'Content-Type': 'application/json'
-    },
-    timeout: config.video.jobTimeoutMs
-  });
-
-  const rawText = response.data?.choices?.[0]?.message?.content?.trim();
-
-  if (!rawText) {
-    throw new Error('Grok returned an empty video analysis.');
-  }
-
-  logInfo(`[XAI_VIDEO_RAW] first 300 chars: ${preview(rawText)}`);
-
-  const parsed = parseJsonObject(rawText);
-  return normalizeVideoIdeas(parsed, transcript);
+  return normalizeVideoAnalysisWithRetry(fetchRaw, transcript, sourceUrl, options, 'xai');
 }
 
-async function requestOpenAIVideoIdeas(transcript, sourceUrl) {
+async function requestOpenAIVideoIdeas(transcript, sourceUrl, options = {}) {
   assertOpenAIConfigured();
+  const quality = isLowConfidenceTranscript(transcript);
 
-  const body = {
-    model: config.openai.chatModel,
-    messages: [
-      {
-        role: 'system',
-        content: VIDEO_ANALYSIS_SYSTEM_PROMPT
+  const fetchRaw = async (retryInstruction = '') => {
+    const body = {
+      model: config.openai.chatModel,
+      messages: [
+        {
+          role: 'system',
+          content: VIDEO_ANALYSIS_SYSTEM_PROMPT
+        },
+        {
+          role: 'user',
+          content: buildTranscriptAnalysisPrompt(transcript, sourceUrl, options, quality, retryInstruction)
+        }
+      ],
+      temperature: 0.25,
+      max_tokens: 1400,
+      response_format: { type: 'json_object' }
+    };
+
+    const response = await axios.post(`${config.openai.baseUrl}/chat/completions`, body, {
+      headers: {
+        Authorization: `Bearer ${config.openai.apiKey}`,
+        'Content-Type': 'application/json'
       },
-      {
-        role: 'user',
-        content: buildTranscriptAnalysisPrompt(transcript, sourceUrl)
-      }
-    ],
-    temperature: 0.45,
-    max_tokens: 1800,
-    response_format: { type: 'json_object' }
+      timeout: config.video.jobTimeoutMs
+    });
+
+    const rawText = response.data?.choices?.[0]?.message?.content?.trim();
+
+    if (!rawText) {
+      throw new Error('OpenAI returned an empty video analysis.');
+    }
+
+    logInfo(`[OPENAI_VIDEO_RAW] first 300 chars: ${preview(rawText)}`);
+    return rawText;
   };
 
-  const response = await axios.post(`${config.openai.baseUrl}/chat/completions`, body, {
-    headers: {
-      Authorization: `Bearer ${config.openai.apiKey}`,
-      'Content-Type': 'application/json'
-    },
-    timeout: config.video.jobTimeoutMs
-  });
-
-  const rawText = response.data?.choices?.[0]?.message?.content?.trim();
-
-  if (!rawText) {
-    throw new Error('OpenAI returned an empty video analysis.');
-  }
-
-  logInfo(`[OPENAI_VIDEO_RAW] first 300 chars: ${preview(rawText)}`);
-
-  const parsed = parseJsonObject(rawText);
-  return normalizeVideoIdeas(parsed, transcript);
+  return normalizeVideoAnalysisWithRetry(fetchRaw, transcript, sourceUrl, options, 'openai');
 }
 
-async function requestOpenRouterVideoIdeas(transcript, sourceUrl) {
-  const body = {
-    model: config.openRouter.videoModel,
-    messages: [
-      {
-        role: 'system',
-        content: VIDEO_ANALYSIS_SYSTEM_PROMPT
+async function requestOpenRouterVideoIdeas(transcript, sourceUrl, options = {}) {
+  const quality = isLowConfidenceTranscript(transcript);
+
+  const fetchRaw = async (retryInstruction = '') => {
+    const body = {
+      model: config.openRouter.videoModel,
+      messages: [
+        {
+          role: 'system',
+          content: VIDEO_ANALYSIS_SYSTEM_PROMPT
+        },
+        {
+          role: 'user',
+          content: buildTranscriptAnalysisPrompt(transcript, sourceUrl, options, quality, retryInstruction)
+        }
+      ],
+      temperature: 0.25,
+      max_tokens: 1400,
+      response_format: { type: 'json_object' }
+    };
+
+    const response = await axios.post(`${config.openRouter.baseUrl}/chat/completions`, body, {
+      headers: {
+        Authorization: `Bearer ${config.openRouter.apiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': config.openRouter.appUrl,
+        'X-Title': config.openRouter.appName
       },
-      {
-        role: 'user',
-        content: buildTranscriptAnalysisPrompt(transcript, sourceUrl)
-      }
-    ],
-    temperature: 0.45,
-    max_tokens: 1800,
-    response_format: { type: 'json_object' }
+      timeout: config.video.jobTimeoutMs
+    });
+
+    const rawText = response.data?.choices?.[0]?.message?.content?.trim();
+
+    if (!rawText) {
+      throw new Error('OpenRouter returned an empty video analysis.');
+    }
+
+    logInfo(`[OPENROUTER_VIDEO_RAW] first 300 chars: ${preview(rawText)}`);
+    return rawText;
   };
 
-  const response = await axios.post(`${config.openRouter.baseUrl}/chat/completions`, body, {
-    headers: {
-      Authorization: `Bearer ${config.openRouter.apiKey}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': config.openRouter.appUrl,
-      'X-Title': config.openRouter.appName
-    },
-    timeout: config.video.jobTimeoutMs
-  });
-
-  const rawText = response.data?.choices?.[0]?.message?.content?.trim();
-
-  if (!rawText) {
-    throw new Error('OpenRouter returned an empty video analysis.');
-  }
-
-  logInfo(`[OPENROUTER_VIDEO_RAW] first 300 chars: ${preview(rawText)}`);
-
-  const parsed = parseJsonObject(rawText);
-  return normalizeVideoIdeas(parsed, transcript);
+  return normalizeVideoAnalysisWithRetry(fetchRaw, transcript, sourceUrl, options, 'openrouter');
 }
 
-async function analyzeTranscriptWithGrok(transcript, sourceUrl) {
+async function analyzeTranscriptWithGrok(transcript, sourceUrl, options = {}) {
   return runWithVideoAIProvider('analyze', {
-    openrouter: () => requestOpenRouterVideoIdeas(transcript, sourceUrl),
-    openai: () => requestOpenAIVideoIdeas(transcript, sourceUrl),
-    xai: () => requestGrokVideoIdeas(transcript, sourceUrl)
+    openrouter: () => requestOpenRouterVideoIdeas(transcript, sourceUrl, options),
+    openai: () => requestOpenAIVideoIdeas(transcript, sourceUrl, options),
+    xai: () => requestGrokVideoIdeas(transcript, sourceUrl, options)
   });
 }
 
 module.exports = {
   analyzeTranscriptWithGrok,
+  buildVideoAnalysisOptions,
+  findBannedVideoPhrases,
+  isLowConfidenceTranscript,
   transcribeAudio
 };

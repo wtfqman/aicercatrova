@@ -1,7 +1,6 @@
 const escapeHtml = require('./utils/escapeHtml');
 
-const TRANSCRIPT_PREVIEW_LENGTH = 1200;
-const TRANSLATION_PREVIEW_LENGTH = 1800;
+const TRANSLATION_PREVIEW_LENGTH = 1200;
 
 function listLines(items) {
   return items
@@ -21,62 +20,50 @@ function previewText(text, maxLength) {
 }
 
 function formatVideoAnalysis(data) {
-  const summary = escapeHtml(data.summary);
-  const titles = listLines(data.titles || []);
-  const hooks = listLines(data.hooks || []);
-  const plan = listLines(data.post_plan || []);
-  const cta = escapeHtml(data.cta);
+  const summary = escapeHtml(data.summary || 'Не получилось уверенно определить смысл ролика.');
+  const qualityNote = data.quality_note ? escapeHtml(data.quality_note) : '';
   const translationText = previewText(data.translation, TRANSLATION_PREVIEW_LENGTH);
-  const translation = translationText ? escapeHtml(translationText) : '';
-  const transcriptText = previewText(data.transcript, TRANSCRIPT_PREVIEW_LENGTH);
-  const transcript = escapeHtml(transcriptText);
+  const translation = translationText
+    ? escapeHtml(translationText)
+    : 'Расшифровка не даёт достаточно ясного текста для нормального перевода.';
+  const ideas = listLines(data.content_ideas || []);
+  const takeaway = data.key_takeaway ? escapeHtml(data.key_takeaway) : '';
+  const optionalBlocks = data.optional_blocks || {};
+  const qualityBlock = qualityNote
+    ? `\n\n<b>⚠️ Важно:</b>\n${qualityNote}`
+    : '';
   const translationBlock = translation
-    ? `\n\n<b>🌐 Нормальный перевод / смысл:</b>\n${translation}`
+    ? `\n\n<b>🌐 Перевод / смысл:</b>\n${translation}`
     : '';
-  const transcriptBlock = transcript
-    ? `\n\n<b>📝 Черновая расшифровка:</b>\n${transcript}`
+  const ideasBlock = ideas
+    ? `\n\n<b>💡 Что можно взять для контента:</b>\n${ideas}`
+    : '';
+  const takeawayBlock = takeaway
+    ? `\n\n<b>🎯 Интересная мысль / приём:</b>\n${takeaway}`
+    : '';
+  const titlesBlock = optionalBlocks.titles?.length
+    ? `\n\n<b>🔥 Заголовки:</b>\n${listLines(optionalBlocks.titles)}`
+    : '';
+  const hooksBlock = optionalBlocks.hooks?.length
+    ? `\n\n<b>⚡ Хуки:</b>\n${listLines(optionalBlocks.hooks)}`
+    : '';
+  const planBlock = optionalBlocks.post_plan?.length
+    ? `\n\n<b>🧩 План поста:</b>\n${listLines(optionalBlocks.post_plan)}`
+    : '';
+  const ctaBlock = optionalBlocks.cta
+    ? `\n\n<b>CTA:</b>\n${escapeHtml(optionalBlocks.cta)}`
     : '';
 
-  return `<b>✅ Видео разобрано</b>
-
-<b>Что в ролике:</b>
-${summary}${translationBlock}
-
-<b>🔥 Заголовки:</b>
-${titles}
-
-<b>⚡ Хуки:</b>
-${hooks}
-
-<b>🧩 План поста:</b>
-${plan}
-
-<b>CTA:</b>
-${cta}${transcriptBlock}`;
+  return `<b>✅ Кратко о ролике:</b>
+${summary}${qualityBlock}${translationBlock}${ideasBlock}${takeawayBlock}${titlesBlock}${hooksBlock}${planBlock}${ctaBlock}`;
 }
 
 function formatTranscriptChunks(transcript) {
-  const text = String(transcript || '').trim();
-  const chunks = [];
-  const chunkSize = 3000;
-
-  for (let index = TRANSCRIPT_PREVIEW_LENGTH; index < text.length; index += chunkSize) {
-    chunks.push(text.slice(index, index + chunkSize));
-  }
-
-  return chunks.map((chunk, index) => `<b>📝 Черновая расшифровка, продолжение ${index + 2}:</b>\n${escapeHtml(chunk)}`);
+  return [];
 }
 
 function formatTranslationChunks(translation) {
-  const text = String(translation || '').trim();
-  const chunks = [];
-  const chunkSize = 3000;
-
-  for (let index = TRANSLATION_PREVIEW_LENGTH; index < text.length; index += chunkSize) {
-    chunks.push(text.slice(index, index + chunkSize));
-  }
-
-  return chunks.map((chunk, index) => `<b>🌐 Нормальный перевод / смысл, продолжение ${index + 2}:</b>\n${escapeHtml(chunk)}`);
+  return [];
 }
 
 module.exports = {

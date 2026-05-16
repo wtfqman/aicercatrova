@@ -142,7 +142,7 @@ bot.on(message('text'), withErrorBoundary('text', async (ctx) => {
   const videoUrl = extractSupportedVideoUrl(ctx.message.text);
 
   if (videoUrl) {
-    await handleVideoLink(ctx, videoUrl);
+    await handleVideoLink(ctx, videoUrl, ctx.message.text);
     return;
   }
 

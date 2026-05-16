@@ -1,7 +1,7 @@
-const { analyzeTranscriptWithGrok, transcribeAudio } = require('../xaiVideoAI');
+const { analyzeTranscriptWithGrok, buildVideoAnalysisOptions, transcribeAudio } = require('../xaiVideoAI');
 const { cleanupWorkspace, downloadAudioFromVideo } = require('../videoDownloader');
 const { setLastVideoTranscript } = require('../memory');
-const { formatTranscriptChunks, formatTranslationChunks, formatVideoAnalysis } = require('../responseVideoFormatter');
+const { formatVideoAnalysis } = require('../responseVideoFormatter');
 const { logError, logInfo } = require('../utils/logger');
 
 const HTML_OPTIONS = { parse_mode: 'HTML' };
@@ -107,7 +107,7 @@ function isXAIAccessError(error) {
     combined.includes('permission');
 }
 
-async function handleVideoLink(ctx, url) {
+async function handleVideoLink(ctx, url, requestText = '') {
   const userId = ctx.from?.id || ctx.chat?.id;
   let loadingMessage = null;
   let workspace = null;
@@ -124,20 +124,12 @@ async function handleVideoLink(ctx, url) {
     logInfo(`[VIDEO_STT_START] userId=${String(userId || 'anonymous')}`);
     const transcript = await transcribeAudio(downloaded.audioPath);
     logInfo(`[VIDEO_ANALYSIS_START] userId=${String(userId || 'anonymous')}`);
-    const analysis = await analyzeTranscriptWithGrok(transcript, url);
+    const analysis = await analyzeTranscriptWithGrok(transcript, url, buildVideoAnalysisOptions(requestText));
     const formattedMessage = formatVideoAnalysis(analysis);
 
     setLastVideoTranscript(userId, transcript, url);
 
     await safeEditOrReply(ctx, loadingMessage, formattedMessage, HTML_OPTIONS);
-
-    for (const transcriptChunk of formatTranscriptChunks(analysis.transcript)) {
-      await safeReply(ctx, transcriptChunk, HTML_OPTIONS);
-    }
-
-    for (const translationChunk of formatTranslationChunks(analysis.translation)) {
-      await safeReply(ctx, translationChunk, HTML_OPTIONS);
-    }
   } catch (error) {
     logError('Failed to process video link', error);
 
