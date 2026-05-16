@@ -2,7 +2,6 @@ const { analyzeTranscriptWithGrok, transcribeAudio } = require('../xaiVideoAI');
 const { cleanupWorkspace, downloadAudioFromVideo } = require('../videoDownloader');
 const { setLastVideoTranscript } = require('../memory');
 const { formatTranscriptChunks, formatTranslationChunks, formatVideoAnalysis } = require('../responseVideoFormatter');
-const { translateTextToRussian } = require('../translator');
 const { logError, logInfo } = require('../utils/logger');
 
 const HTML_OPTIONS = { parse_mode: 'HTML' };
@@ -124,11 +123,8 @@ async function handleVideoLink(ctx, url) {
 
     logInfo(`[VIDEO_STT_START] userId=${String(userId || 'anonymous')}`);
     const transcript = await transcribeAudio(downloaded.audioPath);
-    logInfo(`[VIDEO_TRANSLATION_START] userId=${String(userId || 'anonymous')}`);
-    const translation = await translateTextToRussian(transcript);
     logInfo(`[VIDEO_ANALYSIS_START] userId=${String(userId || 'anonymous')}`);
     const analysis = await analyzeTranscriptWithGrok(transcript, url);
-    analysis.translation = translation;
     const formattedMessage = formatVideoAnalysis(analysis);
 
     setLastVideoTranscript(userId, transcript, url);

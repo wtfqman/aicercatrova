@@ -31,12 +31,15 @@ function formatVideoAnalysis(data) {
   const transcriptText = previewText(data.transcript, TRANSCRIPT_PREVIEW_LENGTH);
   const transcript = escapeHtml(transcriptText);
   const translationBlock = translation
-    ? `\n\n<b>🌐 Готовый перевод:</b>\n${translation}`
+    ? `\n\n<b>🌐 Нормальный перевод / смысл:</b>\n${translation}`
+    : '';
+  const transcriptBlock = transcript
+    ? `\n\n<b>📝 Черновая расшифровка:</b>\n${transcript}`
     : '';
 
-  return `<b>✅ Расшифровка, перевод и идеи готовы</b>
+  return `<b>✅ Видео разобрано</b>
 
-<b>Кратко:</b>
+<b>Что в ролике:</b>
 ${summary}${translationBlock}
 
 <b>🔥 Заголовки:</b>
@@ -49,10 +52,7 @@ ${hooks}
 ${plan}
 
 <b>CTA:</b>
-${cta}
-
-<b>📝 Оригинальная расшифровка:</b>
-${transcript}`;
+${cta}${transcriptBlock}`;
 }
 
 function formatTranscriptChunks(transcript) {
@@ -64,7 +64,7 @@ function formatTranscriptChunks(transcript) {
     chunks.push(text.slice(index, index + chunkSize));
   }
 
-  return chunks.map((chunk, index) => `<b>📝 Оригинальная расшифровка, продолжение ${index + 2}:</b>\n${escapeHtml(chunk)}`);
+  return chunks.map((chunk, index) => `<b>📝 Черновая расшифровка, продолжение ${index + 2}:</b>\n${escapeHtml(chunk)}`);
 }
 
 function formatTranslationChunks(translation) {
@@ -76,7 +76,7 @@ function formatTranslationChunks(translation) {
     chunks.push(text.slice(index, index + chunkSize));
   }
 
-  return chunks.map((chunk, index) => `<b>🌐 Готовый перевод, продолжение ${index + 2}:</b>\n${escapeHtml(chunk)}`);
+  return chunks.map((chunk, index) => `<b>🌐 Нормальный перевод / смысл, продолжение ${index + 2}:</b>\n${escapeHtml(chunk)}`);
 }
 
 module.exports = {
